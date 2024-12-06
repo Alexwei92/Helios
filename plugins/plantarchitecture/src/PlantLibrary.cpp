@@ -384,7 +384,8 @@ void PlantArchitecture::initializeAppleTreeShoots(){
     phytomer_parameters_apple.inflorescence.roll = 0;
     phytomer_parameters_apple.inflorescence.flower_prototype_scale = 0.03;
     phytomer_parameters_apple.inflorescence.flower_prototype_function = AppleFlowerPrototype;
-    phytomer_parameters_apple.inflorescence.fruit_prototype_scale = 0.1;
+    // phytomer_parameters_apple.inflorescence.fruit_prototype_scale = 0.1;
+    phytomer_parameters_apple.inflorescence.fruit_prototype_scale.normalDistribution(0.1, 0.01);
     phytomer_parameters_apple.inflorescence.fruit_prototype_function = AppleFruitPrototype;
     phytomer_parameters_apple.inflorescence.fruit_gravity_factor_fraction = 0.5;
 
@@ -442,8 +443,8 @@ void PlantArchitecture::initializeAppleTreeShoots(){
 uint PlantArchitecture::buildAppleTree(const helios::vec3 &base_position) {
 
     if( shoot_types.empty() ){
-        //automatically initialize almond tree shoots
-        initializeAlmondTreeShoots();
+        //automatically initialize apple tree shoots
+        initializeAppleTreeShoots();
     }
 
     uint plantID = addPlantInstance(base_position, 0);
