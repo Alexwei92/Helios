@@ -385,7 +385,7 @@ void PlantArchitecture::initializeAppleTreeShoots(){
     phytomer_parameters_apple.inflorescence.flower_prototype_scale = 0.03;
     phytomer_parameters_apple.inflorescence.flower_prototype_function = AppleFlowerPrototype;
     // phytomer_parameters_apple.inflorescence.fruit_prototype_scale = 0.1;
-    phytomer_parameters_apple.inflorescence.fruit_prototype_scale.normalDistribution(0.1, 0.01);
+    phytomer_parameters_apple.inflorescence.fruit_prototype_scale.uniformDistribution(0.08, 0.1);
     phytomer_parameters_apple.inflorescence.fruit_prototype_function = AppleFruitPrototype;
     phytomer_parameters_apple.inflorescence.fruit_gravity_factor_fraction = 0.5;
 
