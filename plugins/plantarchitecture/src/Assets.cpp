@@ -177,7 +177,8 @@ uint AppleLeafPrototype( helios::Context* context_ptr, uint subdivisions, int co
 }
 
 uint AppleFruitPrototype( helios::Context* context_ptr, uint subdivisions, float time_since_fruit_set ){
-    std::vector<uint> UUIDs = context_ptr->loadOBJ( "plugins/plantarchitecture/assets/obj/AppleFruit.obj", make_vec3(0.,0,0), 0,nullrotation, RGB::black, "ZUP", true );
+    // std::vector<uint> UUIDs = context_ptr->loadOBJ( "plugins/plantarchitecture/assets/obj/AppleFruit.obj", make_vec3(0.,0,0), 0,nullrotation, RGB::black, "ZUP", true );
+    std::vector<uint> UUIDs = context_ptr->loadOBJ( "plugins/plantarchitecture/assets/obj/AppleFruit_New.obj", make_vec3(0.,0,0), 0,nullrotation, RGB::black, "ZUP", true );
     uint objID = context_ptr->addPolymeshObject( UUIDs );
     return objID;
 }
