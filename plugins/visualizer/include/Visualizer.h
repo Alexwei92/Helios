@@ -958,6 +958,12 @@ public:
 
  void clearColor();
 
+  // start of my new functions
+  void plotFastUpdate();
+  void plotFastUpdate( bool hide_window );
+  std::vector<uint8_t> getRGBData();
+  std::vector<float> getCameraPose();
+  // end of my new functions
 
 private:
 
@@ -1107,7 +1113,7 @@ private:
 
   bool message_flag;
 
-
+  glm::mat4 last_depthMVP;
 };
 
 
@@ -1115,3 +1121,4 @@ int checkerrors();
 
 
 #endif
+
