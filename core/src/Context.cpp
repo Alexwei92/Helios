@@ -8014,3 +8014,30 @@ float Context::getConeObjectLength(uint ObjID) const { return getConeObjectPoint
 float Context::getConeObjectVolume(uint ObjID) const { return getConeObjectPointer_private(ObjID)->getVolume(); }
 
 float Context::getPolymeshObjectVolume(uint ObjID) const { return getPolymeshObjectPointer_private(ObjID)->getVolume(); }
+
+// start of my new functions
+void Context::showObject( const std::vector<uint> &ObjIDs ){
+    for ( uint ObjID : ObjIDs ) {
+#ifdef HELIOS_DEBUG
+        if( !doesObjectExist(ObjID) ){
+            helios_runtime_error("ERROR (Context::showObject): Object ID of " + std::to_string(ObjID) + " does not exist in the Context.");
+        }
+#endif
+        objects.at(ObjID)->ishidden = false;
+        for( uint UUID : objects.at(ObjID)->getPrimitiveUUIDs() ){
+            primitives.at(UUID)->ishidden = false;
+        }
+    }
+}
+
+void Context::showPrimitive( const std::vector<uint> &UUIDs ){
+    for ( uint UUID : UUIDs ){
+#ifdef HELIOS_DEBUG
+        if( !doesPrimitiveExist(UUID) ){
+            helios_runtime_error("ERROR (Context::showPrimitive): UUID of " + std::to_string(UUID) + " does not exist in the Context.");
+        }
+#endif
+        primitives.at(UUID)->ishidden = false;
+    }
+}
+// end of my new functions

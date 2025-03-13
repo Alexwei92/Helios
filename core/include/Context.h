@@ -6880,6 +6880,10 @@ public:
      */
     [[nodiscard]] std::vector<uint> filterObjectsByData( const std::vector<uint> &objIDs, const std::string &object_data_label, const std::string &filter_value ) const;
 
+    // start of my new functions
+    void showObject( const std::vector<uint> &ObjIDs );
+    void showPrimitive( const std::vector<uint> &UUIDs );
+    // end of my new functions
 };
 
 

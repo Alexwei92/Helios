@@ -38,6 +38,8 @@ extern "C" {
 
 #include "Visualizer.h"
 
+#include <thread>
+
 using namespace helios;
 
 struct my_error_mgr {
@@ -3342,6 +3344,8 @@ void Visualizer::plotUpdate(bool hide_window) {
         depthMVP = glm::mat4(1.0);
     }
 
+    last_depthMVP = depthMVP;
+
     assert(checkerrors());
 
     // Render to the screen
@@ -4179,3 +4183,198 @@ int checkerrors() {
         return 1;
     }
 }
+
+// start of my new functions
+void Visualizer::plotFastUpdate(){
+    plotFastUpdate(false);
+}
+
+void Visualizer::plotFastUpdate(bool hide_window){
+    if (!hide_window) {
+        glfwShowWindow(scast<GLFWwindow *>(window));
+    }
+
+    if (last_depthMVP == glm::mat4()) {
+
+        //Update the Context geometry
+        buildContextGeometry_private();
+
+        //Set the view to fit window
+        if (camera_lookat_center.x == 0 && camera_lookat_center.y == 0 && camera_lookat_center.z == 0) { //default center
+            if (camera_eye_location.x < 1e-4 && camera_eye_location.y < 1e-4 && camera_eye_location.z == 2.f) { //default eye position
+
+                vec3 center_sph;
+                vec3 radius;
+                geometry_handler.getDomainBoundingSphere(center_sph, radius);
+                float domain_bounding_radius = radius.magnitude();
+
+                vec2 xbounds, ybounds, zbounds;
+                geometry_handler.getDomainBoundingBox(xbounds, ybounds, zbounds);
+                camera_lookat_center = make_vec3(0.5f * (xbounds.x + xbounds.y), 0.5f * (ybounds.x + ybounds.y), 0.5f * (zbounds.x + zbounds.y));
+                camera_eye_location = camera_lookat_center + sphere2cart(make_SphericalCoord(2.f * domain_bounding_radius, 20.f * PI_F / 180.f, 0));
+            }
+        }
+
+        //Update
+        if (colorbar_flag == 2) {
+            addColorbarByCenter(colorbar_title.c_str(), colorbar_size, colorbar_position, colorbar_fontcolor, colormap_current);
+        }
+
+        //Watermark
+        if (isWatermarkVisible) {
+            float hratio = float(Wdisplay) / float(Hdisplay);
+            float width = 0.2389f / 0.8f / hratio;
+            addRectangleByCenter(make_vec3(0.75f * width, 0.95f, 0), make_vec2(width, 0.07), make_SphericalCoord(0, 0), "plugins/visualizer/textures/Helios_watermark.png", COORDINATES_WINDOW_NORMALIZED);
+        }
+
+        transferBufferData();
+
+        bool shadow_flag = false;
+        for (const auto &model: primaryLightingModel) {
+            if (model == Visualizer::LIGHTING_PHONG_SHADOWED) {
+                shadow_flag = true;
+                break;
+            }
+        }
+
+        glm::mat4 depthMVP;
+
+        if (shadow_flag) {
+            // Depth buffer for shadows
+            glBindFramebuffer(GL_FRAMEBUFFER, framebufferID);
+            glViewport(0, 0, shadow_buffer_size.x, shadow_buffer_size.y); // Render on the whole framebuffer, complete from the lower left corner to the upper right
+
+            // Clear the screen
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+            depthShader.useShader();
+
+            updatePerspectiveTransformation(true);
+
+            // Compute the MVP matrix from the light's point of view
+            depthMVP = computeShadowDepthMVP();
+            depthShader.setTransformationMatrix(depthMVP);
+
+            //bind depth texture
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, depthTexture);
+            glActiveTexture(GL_TEXTURE0);
+
+            depthShader.enableTextureMaps();
+            depthShader.enableTextureMasks();
+
+            render(true);
+        } else {
+            depthMVP = glm::mat4(1.0);
+        }
+
+        last_depthMVP = depthMVP;
+    }
+
+    assert(checkerrors());
+
+    // Render to the screen
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, Wframebuffer, Hframebuffer);
+
+    glClearColor(backgroundColor.r, backgroundColor.g, backgroundColor.b, 0.0f);
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    primaryShader.useShader();
+
+    glm::mat4 DepthBiasMVP = biasMatrix * last_depthMVP;
+
+    primaryShader.setDepthBiasMatrix(DepthBiasMVP);
+
+    updatePerspectiveTransformation(false);
+
+    primaryShader.setTransformationMatrix(perspectiveTransformationMatrix);
+
+    primaryShader.enableTextureMaps();
+    primaryShader.enableTextureMasks();
+
+    primaryShader.setLightingModel(primaryLightingModel.at(0));
+    primaryShader.setLightIntensity(lightintensity);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, depthTexture);
+    glUniform1i(primaryShader.shadowmapUniform, 1);
+    glActiveTexture(GL_TEXTURE0);
+
+    render(false);
+
+    glfwPollEvents();
+    getViewKeystrokes(camera_eye_location, camera_lookat_center);
+
+    int width, height;
+    glfwGetFramebufferSize((GLFWwindow *) window, &width, &height);
+    Wframebuffer = width;
+    Hframebuffer = height;
+
+    glfwSwapBuffers((GLFWwindow *) window);
+
+}
+
+std::vector<uint8_t> Visualizer::getRGBData(){
+
+    std::vector<GLubyte> buff;
+    buff.resize( 3*Wframebuffer*Hframebuffer );
+
+    glfwSwapBuffers((GLFWwindow*)window);
+    glReadPixels(0, 0, GLsizei(Wframebuffer), GLsizei(Hframebuffer), GL_RGB, GL_UNSIGNED_BYTE, &buff[0]);
+
+    // //depending on the active frame buffer, we may get all zero data and need to swap it again.
+    // bool zeros = true;
+    // for( int i=0; i<3*Wframebuffer*Hframebuffer; i++ ){
+    //     if( buff[i]!=0 ){
+    //         zeros = false;
+    //         break;
+    //     }
+    // }
+    // if( zeros ){
+
+    //     glfwSwapBuffers((GLFWwindow*)window);
+
+    //     glReadPixels(0, 0, GLsizei(Wframebuffer), GLsizei(Hframebuffer), GL_RGB, GL_UNSIGNED_BYTE, &buff[0]);
+
+    // }
+
+    std::vector<uint8_t> buffer(3*Wframebuffer*Hframebuffer);
+
+    // Multithreading
+    size_t num_threads = std::min<size_t>(std::thread::hardware_concurrency(), 3*Wframebuffer*Hframebuffer);
+    size_t chunk_size = (3*Wframebuffer*Hframebuffer + num_threads - 1) / num_threads;
+
+    std::vector<std::thread> threads;
+    for (size_t t = 0; t < num_threads; ++t) {
+        size_t start = t * chunk_size;
+        size_t end = std::min<size_t>(start + chunk_size, 3*Wframebuffer*Hframebuffer);
+
+        threads.emplace_back([&buffer, &buff, start, end]() {
+            for (size_t i = start; i < end; ++i) {
+                buffer[i] = static_cast<uint8_t>(buff[i]);
+            }
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    return buffer;
+}
+
+std::vector<float> Visualizer::getCameraPose()
+{
+    std::vector<float> camera_pose;
+    camera_pose.push_back(camera_eye_location.x);
+    camera_pose.push_back(camera_eye_location.y);
+    camera_pose.push_back(camera_eye_location.z);
+    camera_pose.push_back(camera_lookat_center.x);
+    camera_pose.push_back(camera_lookat_center.y);
+    camera_pose.push_back(camera_lookat_center.z);
+
+    return camera_pose;
+}
+// end of my new functions

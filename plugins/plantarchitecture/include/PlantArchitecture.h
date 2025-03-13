@@ -2354,6 +2354,10 @@ public:
     friend struct Phytomer;
     friend struct Shoot;
 
+    // start of my new functions
+    void deleteIntersectingFruits(uint plantID);
+    // end of my new functions
+    
 protected:
 
     helios::Context* context_ptr;

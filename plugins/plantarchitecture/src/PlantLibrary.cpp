@@ -374,7 +374,7 @@ void PlantArchitecture::initializeAppleTreeShoots(){
     leaf_prototype.longitudinal_curvature = -0.3f;
     leaf_prototype.lateral_curvature = 0.1f;
     leaf_prototype.subdivisions = 3;
-    leaf_prototype.unique_prototypes = 1;
+    leaf_prototype.unique_prototypes = 10;
 
     // ---- Phytomer Parameters ---- //
 
@@ -412,7 +412,7 @@ void PlantArchitecture::initializeAppleTreeShoots(){
     phytomer_parameters_apple.inflorescence.roll = 0;
     phytomer_parameters_apple.inflorescence.flower_prototype_scale = 0.03;
     phytomer_parameters_apple.inflorescence.flower_prototype_function = AppleFlowerPrototype;
-    phytomer_parameters_apple.inflorescence.fruit_prototype_scale = 0.1;
+    phytomer_parameters_apple.inflorescence.fruit_prototype_scale.uniformDistribution(0.08, 0.1);
     phytomer_parameters_apple.inflorescence.fruit_prototype_function = AppleFruitPrototype;
     phytomer_parameters_apple.inflorescence.fruit_gravity_factor_fraction = 0.5;
 
