@@ -1156,7 +1156,13 @@ public:
     void calibrateCamera(const std::string &originalcameralabel, const float scalefactor,
                          const std::vector<std::vector<float>> &truevalues, const std::string &calibratedmark);
 
-
+    // start of my new functions
+    void runCamera( const std::string &label );
+    void runCamera( const std::vector<std::string> &labels );
+    std::vector<float> getDepthData(const std::string &cameralabel, float max_depth, bool normalize=true);
+    std::vector<int> getPrimitiveDataLabelMap(const std::string &cameralabel, const std::string &primitive_data_label, int padvalue);
+    std::vector<std::vector<float>> getImageBoundingBoxes_ObjectData(const std::string &cameralabel, const std::string &object_data_label);
+    // end of my new functions
 
 protected:
 

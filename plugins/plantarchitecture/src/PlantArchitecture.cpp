@@ -16,6 +16,7 @@
 #include "PlantArchitecture.h"
 
 #include <utility>
+#include <unordered_set>
 
 using namespace helios;
 
@@ -3950,3 +3951,83 @@ void PlantArchitecture::optionalOutputObjectData(const std::vector<std::string> 
         output_object_data.at(label) = true;
     }
 }
+
+// start of my new functions
+void PlantArchitecture::deleteIntersectingFruits(uint plantID) {
+#ifdef HELIOS_DEBUG
+    if (plant_instances.find(plantID) == plant_instances.end()) {
+        helios_runtime_error("ERROR (PlantArchitecture::getPlantInflorescenceObjectIDs): Plant with ID of " + std::to_string(plantID) + " does not exist.");
+    }
+#endif
+
+    auto intersects = [](const vec3 &min1, const vec3 &max1, const vec3 &min2, const vec3 &max2, float overlapTolerance = 0.15f) {
+        vec3 overlap{std::min(max1.x, max2.x) - std::max(min1.x, min2.x), std::min(max1.y, max2.y) - std::max(min1.y, min2.y), std::min(max1.z, max2.z) - std::max(min1.z, min2.z)};
+
+        if (overlap.x <= 0.f || overlap.y <= 0.f || overlap.z <= 0.f)
+            return false;
+
+        vec3 minSize{std::min(max1.x - min1.x, max2.x - min2.x), std::min(max1.y - min1.y, max2.y - min2.y), std::min(max1.z - min1.z, max2.z - min2.z)};
+        vec3 frac{overlap.x / minSize.x, overlap.y / minSize.y, overlap.z / minSize.z};
+
+        return (frac.x > overlapTolerance) && (frac.y > overlapTolerance) && (frac.z > overlapTolerance);
+    };
+
+    std::vector<std::pair<vec3, vec3>> bounding_boxes;
+    std::vector<uint> fruit_UUIDs = getPlantFruitObjectIDs(plantID);
+
+    if (fruit_UUIDs.size() == 0)
+        return;
+
+    // Get bounding boxes for all fruits
+    for (uint UUID: fruit_UUIDs) {
+        vec3 min_corner, max_corner;
+        context_ptr->getObjectBoundingBox(UUID, min_corner, max_corner);
+        bounding_boxes.emplace_back(min_corner, max_corner);
+    }
+
+    // Detect and remove intersecting fruits
+    std::unordered_set<uint> fruits_to_remove;
+    std::unordered_set<size_t> removed_indices;
+
+    for (size_t i = 0; i < bounding_boxes.size(); ++i) {
+        if (removed_indices.count(i))
+            continue;
+
+        for (size_t j = i + 1; j < bounding_boxes.size(); ++j) {
+            if (intersects(bounding_boxes[i].first, bounding_boxes[i].second, bounding_boxes[j].first, bounding_boxes[j].second, 0.25f)) {
+                removed_indices.insert(j);
+                fruits_to_remove.insert(fruit_UUIDs[j]);
+            }
+        }
+    }
+
+    for (auto &shoot: plant_instances.at(plantID).shoot_tree) {
+        for (auto &phytomer: shoot->phytomers) {
+            for (auto &petiole: phytomer->floral_buds) {
+                for (auto &fbud: petiole) {
+                    if (fbud.state < BUD_FRUITING) continue;
+
+                    for (int p = fbud.inflorescence_objIDs.size() - 1; p >= 0; p--) {
+                        uint objID = fbud.inflorescence_objIDs.at(p);
+
+                        if (fruits_to_remove.find(objID) != fruits_to_remove.end()) {
+                            // context_ptr->deleteObject(objID);
+                            // fbud.inflorescence_objIDs.erase(fbud.inflorescence_objIDs.begin() + p);
+                            // fbud.inflorescence_bases.erase(fbud.inflorescence_bases.begin() + p);
+
+                            // only works for apple
+                            context_ptr->deleteObject(fbud.peduncle_objIDs);
+                            context_ptr->deleteObject(fbud.inflorescence_objIDs);
+                            fbud.peduncle_objIDs.clear();
+                            fbud.inflorescence_objIDs.clear();
+                            fbud.inflorescence_bases.clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "plant " << plantID << ": " << fruits_to_remove.size() << " fruits removed due to intersection" << std::endl;
+}
+// end of my new functions

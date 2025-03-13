@@ -932,6 +932,13 @@ public:
      */
     [[nodiscard]] glm::mat4 getPerspectiveTransformationMatrix() const;
 
+    // start of my new functions
+    void plotFastUpdate();
+    void plotFastUpdate( bool hide_window );
+    std::vector<uint8_t> getRGBData();
+    std::vector<float> getCameraPose();
+    // end of my new functions
+
 private:
 
     /**
@@ -1295,6 +1302,7 @@ private:
     friend struct Shader;
     friend struct Texture;
 
+    glm::mat4 last_depthMVP;
 };
 
 inline glm::vec3 glm_vec3(const helios::vec3& v) {
