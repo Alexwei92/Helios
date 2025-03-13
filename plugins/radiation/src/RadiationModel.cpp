@@ -14,6 +14,8 @@
 */
 
 #include "RadiationModel.h"
+#include <thread>
+#include <mutex>
 
 using namespace helios;
 
@@ -5904,3 +5906,370 @@ void sutilReportError(const char* message)
   }
 #endif
 }
+
+// start of my new functions
+void RadiationModel::runCamera( const std::string &label ) {
+    std::vector<std::string> labels{label};
+    runCamera(labels);
+}
+
+void RadiationModel::runCamera( const std::vector<std::string> &label ) {
+
+    //----- VERIFICATIONS -----//
+
+    //Check to make sure some geometry was added to the context
+    if( context->getPrimitiveCount()==0 ){
+        std::cerr << "WARNING (RadiationModel::runCamera): No geometry was added to the context. There is nothing to simulate...exiting." << std::endl;
+        return;
+    }
+
+    for( const std::string &band : label ){
+        if( !doesBandExist(band) ){
+            helios_runtime_error("ERROR (RadiationModel::runCamera): Cannot run band " + band + " because it is not a valid band. Use addRadiationBand() function to add the band.");
+        }
+    }
+
+    //Number of radiation cameras
+    uint Ncameras = cameras.size();
+
+    // **** CAMERA RAY TRACE **** //
+    if( Ncameras>0 ){
+
+        uint cam=0;
+        for( auto & camera : cameras ){
+
+            //set variable values
+            RT_CHECK_ERROR( rtVariableSet3f( camera_position_RTvariable, camera.second.position.x, camera.second.position.y, camera.second.position.z ) );
+            helios::SphericalCoord dir = cart2sphere( camera.second.lookat - camera.second.position );
+            RT_CHECK_ERROR( rtVariableSet2f( camera_direction_RTvariable, dir.zenith, dir.azimuth ) );
+            RT_CHECK_ERROR( rtVariableSet1f( camera_lens_diameter_RTvariable, camera.second.lens_diameter ) );
+            RT_CHECK_ERROR( rtVariableSet1f( FOV_aspect_RTvariable, camera.second.FOV_aspect_ratio ) );
+            RT_CHECK_ERROR( rtVariableSet1f( camera_focal_length_RTvariable, camera.second.focal_length ) );
+            RT_CHECK_ERROR( rtVariableSet1f( camera_viewplane_length_RTvariable, 0.5f/tanf(0.5f*camera.second.HFOV_degrees*M_PI/180.f) ) );
+            RT_CHECK_ERROR( rtVariableSet1ui( camera_ID_RTvariable, cam ));
+
+
+            optix::int3 launch_dim_camera = optix::make_int3( camera.second.antialiasing_samples, camera.second.resolution.x, camera.second.resolution.y );
+
+
+            std::string camera_label = camera.second.label;
+
+
+            //--- Pixel Labeling Trace ---//
+
+            zeroBuffer1D(camera_pixel_label_RTbuffer,camera.second.resolution.x*camera.second.resolution.y);
+            zeroBuffer1D(camera_pixel_depth_RTbuffer,camera.second.resolution.x*camera.second.resolution.y);
+
+            // if( message_flag ){
+            //     std::cout << "Performing camera pixel labeling ray trace for camera " << camera.second.label << "..." << std::flush;
+            // }
+            RT_CHECK_ERROR( rtContextLaunch3D( OptiX_Context, RAYTYPE_PIXEL_LABEL , 1, launch_dim_camera.y, launch_dim_camera.z ) );
+            // if( message_flag ){
+            //     std::cout << "done." << std::endl;
+            // }
+
+            camera.second.pixel_label_UUID = getOptiXbufferData_ui(camera_pixel_label_RTbuffer);
+            camera.second.pixel_depth = getOptiXbufferData(camera_pixel_depth_RTbuffer);
+
+            //the IDs from the ray trace do not necessarily correspond to the actual primitive UUIDs, so look them up.
+            for( uint ID=0; ID<camera.second.pixel_label_UUID.size(); ID++ ){
+                if( camera.second.pixel_label_UUID.at(ID)>0 ){
+                    camera.second.pixel_label_UUID.at(ID) = context_UUIDs.at(camera.second.pixel_label_UUID.at(ID) - 1) + 1;
+                }
+            }
+
+            std::string data_label = "camera_" + camera_label + "_pixel_UUID";
+
+            context->setGlobalData(data_label.c_str(), HELIOS_TYPE_UINT,camera.second.resolution.x*camera.second.resolution.y,&camera.second.pixel_label_UUID[0]);
+
+            data_label = "camera_" + camera_label + "_pixel_depth";
+
+            context->setGlobalData(data_label.c_str(), HELIOS_TYPE_FLOAT,camera.second.resolution.x*camera.second.resolution.y,&camera.second.pixel_depth[0]);
+
+            cam++;
+        }
+    }
+
+}
+
+std::vector<float> RadiationModel::getDepthData(const std::string &cameralabel, float max_depth, bool normalize)
+{
+    if( cameras.find(cameralabel)==cameras.end() ){
+        helios_runtime_error( "ERROR (RadiationModel::getDepthData): Camera '" + cameralabel + "' does not exist." );
+    }
+
+    std::string global_data_label = "camera_" + cameralabel + "_pixel_depth";
+    if( !context->doesGlobalDataExist(global_data_label.c_str()) ){
+        helios_runtime_error("ERROR (RadiationModel::getDepthData): Depth data for camera '" + cameralabel + "' does not exist. Was the radiation model run for the camera?" );
+    }
+    std::vector<float> camera_depth;
+    context->getGlobalData(global_data_label.c_str(), camera_depth);
+
+    int2 camera_resolution = cameras.at(cameralabel).resolution;
+
+    std::vector<float> buffer(camera_resolution.x * camera_resolution.y);
+
+    if (normalize)
+    {
+        float min_depth = 99999;
+        for( auto &depth : camera_depth ){
+            if( depth<0 || depth>max_depth ){
+                depth = max_depth;
+            }
+            if( depth<min_depth ){
+                min_depth = depth;
+            }
+        }
+
+        float range = max_depth - min_depth;
+        if (range <= 1e-12f)
+        {
+            std::fill(buffer.begin(), buffer.end(), 1.0f);
+            return buffer;
+        }
+
+        // Multithreading
+        uint num_threads = std::min<uint>(std::thread::hardware_concurrency(), camera_resolution.y);
+        uint chunk_size = (camera_resolution.y + num_threads - 1) / num_threads;
+
+        std::vector<std::thread> threads;
+
+        for (uint t = 0; t < num_threads; t++) {
+            uint start_row = t * chunk_size;
+            uint end_row = std::min<uint>(camera_resolution.y, start_row + chunk_size);
+
+            threads.emplace_back([=, &camera_depth, &buffer]() {
+                for (uint j = start_row; j < end_row; j++) {
+                    for (uint i = 0; i < camera_resolution.x; i++) {
+                        uint idx = j * camera_resolution.x + i;
+                        float depth = camera_depth[idx];
+                        float c = 1.0f - (depth - min_depth) / range;
+
+                        uint ii = camera_resolution.x - i - 1;
+                        uint jj = camera_resolution.y - j - 1;
+                        buffer[jj * camera_resolution.x + ii] = c;
+                    }
+                }
+            });
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+    else
+    {
+        // Multithreading
+        uint num_threads = std::min<uint>(std::thread::hardware_concurrency(), camera_resolution.y);
+        uint chunk_size = (camera_resolution.y + num_threads - 1) / num_threads;
+
+        std::vector<std::thread> threads;
+
+        for (uint t = 0; t < num_threads; t++) {
+            uint start_row = t * chunk_size;
+            uint end_row = std::min<uint>(camera_resolution.y, start_row + chunk_size);
+
+            threads.emplace_back([=, &camera_depth, &buffer]() {
+                for (uint j = start_row; j < end_row; j++) {
+                    for (uint i=0; i < camera_resolution.x; i++) {
+                        uint idx = j * camera_resolution.x + i;
+                        uint ii = camera_resolution.x - i -1;
+                        uint jj = camera_resolution.y - j - 1;
+
+                        buffer[jj * camera_resolution.x + ii] = camera_depth[idx];
+                    }
+                }
+            });
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }   
+    }
+
+    return buffer;
+}
+
+std::vector<int> RadiationModel::getPrimitiveDataLabelMap(const std::string &cameralabel, const std::string &primitive_data_label, int padvalue){
+
+    if( cameras.find(cameralabel)==cameras.end() ){
+        helios_runtime_error( "ERROR (RadiationModel::getPrimitiveDataLabelMap): Camera '" + cameralabel + "' does not exist." );
+    }
+
+    //Get image UUID labels
+    std::string global_data_label = "camera_" + cameralabel + "_pixel_UUID";
+    if( !context->doesGlobalDataExist(global_data_label.c_str() ) ){
+        helios_runtime_error( "ERROR (RadiationModel::getPrimitiveDataLabelMap): Pixel labels for camera '" + cameralabel + "' do not exist. Was the radiation model run to generate labels?" );
+    }
+    std::vector<uint> pixel_UUIDs;
+    context->getGlobalData(global_data_label.c_str(), pixel_UUIDs);
+    
+    int2 camera_resolution = cameras.at(cameralabel).resolution;
+
+    std::vector<int> buffer(camera_resolution.x * camera_resolution.y);
+
+    // Multithreading
+    uint num_threads = std::min<uint>(std::thread::hardware_concurrency(), camera_resolution.y);
+    uint chunk_size = (camera_resolution.y + num_threads - 1) / num_threads;
+
+    std::vector<std::thread> threads;
+
+    for (uint t = 0; t < num_threads; t++) {
+        uint start_row = t * chunk_size;
+        uint end_row = std::min<uint>(camera_resolution.y, start_row + chunk_size);
+
+        threads.emplace_back([=, &pixel_UUIDs, &buffer]() {
+            for (uint j = start_row; j < end_row; j++) {
+                for (uint i = 0; i < camera_resolution.x; i++) {
+                    uint ii = camera_resolution.x - i - 1;
+                    uint jj = camera_resolution.y - j - 1;
+                    uint UUID = pixel_UUIDs.at(j * camera_resolution.x + ii) - 1;
+                    if (context->doesPrimitiveExist(UUID) && context->doesPrimitiveDataExist(UUID, primitive_data_label.c_str())){
+                        HeliosDataType datatype = context->getPrimitiveDataType(UUID, primitive_data_label.c_str());
+                        if (datatype == HELIOS_TYPE_INT){
+                            int labeldata;
+                            context->getPrimitiveData(UUID, primitive_data_label.c_str(), labeldata);
+                            buffer[jj * camera_resolution.x + i] = labeldata;
+                        }
+                        else{
+                            buffer[jj * camera_resolution.x + i] = padvalue;
+                        }
+                    } else{
+                        buffer[jj * camera_resolution.x + i] = padvalue;
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    return buffer;
+}
+
+std::vector<std::vector<float>> RadiationModel::getImageBoundingBoxes_ObjectData(const std::string &cameralabel, const std::string &object_data_label){
+
+    if( cameras.find(cameralabel)==cameras.end() ){
+        helios_runtime_error( "ERROR (RadiationModel::writeImageBoundingBoxes_ObjectData): Camera '" + cameralabel + "' does not exist." );
+    }
+
+    //Get image UUID labels
+    std::string global_data_label = "camera_" + cameralabel + "_pixel_UUID";
+    if( !context->doesGlobalDataExist(global_data_label.c_str() ) ){
+        helios_runtime_error( "ERROR (RadiationModel::writeImageBoundingBoxes_ObjectData): Pixel labels for camera '" + cameralabel + "' do not exist. Was the radiation model run to generate labels?" );
+    }
+    std::vector<uint> pixel_UUIDs;
+    context->getGlobalData(global_data_label.c_str(), pixel_UUIDs);
+    
+    int2 camera_resolution = cameras.at(cameralabel).resolution;
+
+    std::map<int, vec4> pdata_bounds;
+
+    // Multithreading
+    std::mutex bounds_mutex;
+
+    uint num_threads = std::min<uint>(std::thread::hardware_concurrency(), camera_resolution.y);
+    uint chunk_size = (camera_resolution.y + num_threads - 1) / num_threads;
+
+    std::vector<std::thread> threads;
+
+    for (uint t = 0; t < num_threads; t++) {
+        uint start_row = t * chunk_size;
+        uint end_row = std::min<uint>(camera_resolution.y, start_row + chunk_size);
+
+        threads.emplace_back([=, &pdata_bounds, &bounds_mutex]() {
+            std::map<int, vec4> local_bounds;
+
+            for (int j = start_row; j < end_row; j++) {
+                for (int i = 0; i < camera_resolution.x; i++) {
+                    uint ii = camera_resolution.x - i -1;
+                    uint UUID = pixel_UUIDs.at(j * camera_resolution.x + ii)-1;
+
+                    if ( !context->doesPrimitiveExist(UUID) ){
+                        continue;
+                    }
+
+                    uint objID = context->getPrimitiveParentObjectID(UUID);
+                    if ( !context->doesObjectExist(objID) || !context->doesObjectDataExist(objID,object_data_label.c_str())) {
+                        continue;
+                    }
+
+                    uint labeldata;
+                    HeliosDataType datatype = context->getObjectDataType(objID,object_data_label.c_str());
+                    if (datatype == HELIOS_TYPE_UINT){
+                        uint labeldata_ui;
+                        context->getObjectData(objID,object_data_label.c_str(),labeldata_ui);
+                        labeldata = labeldata_ui;
+                    }
+                    else if (datatype == HELIOS_TYPE_INT){
+                        int labeldata_i;
+                        context->getObjectData(objID,object_data_label.c_str(),labeldata_i);
+                        labeldata = (uint)labeldata_i;
+                    }else{
+                        continue;
+                    }
+
+                    if( local_bounds.find(labeldata) == local_bounds.end() ) {
+                        local_bounds[labeldata] = make_vec4(1e6, -1, 1e6, -1);
+                    }
+
+                    if( i<local_bounds[labeldata].x ){
+                        local_bounds[labeldata].x = i;
+                    }
+                    if( i>local_bounds[labeldata].y ){
+                        local_bounds[labeldata].y = i;
+                    }
+                    if( j<local_bounds[labeldata].z ){
+                        local_bounds[labeldata].z = j;
+                    }
+                    if( j>local_bounds[labeldata].w ){
+                        local_bounds[labeldata].w = j;
+                    }
+                }
+            }
+
+            std::lock_guard<std::mutex> lock(bounds_mutex);
+            for( auto pair : local_bounds ){
+                int labeldata = pair.first;
+                const vec4 &local_bbox = pair.second;
+
+                if (pdata_bounds.find(labeldata) == pdata_bounds.end()) {
+                    pdata_bounds[labeldata] = local_bbox;
+                }
+                else {
+                    vec4& global_bbox = pdata_bounds[labeldata];
+                    global_bbox.x = std::min(global_bbox.x, local_bbox.x);
+                    global_bbox.y = std::max(global_bbox.y, local_bbox.y);
+                    global_bbox.z = std::min(global_bbox.z, local_bbox.z);
+                    global_bbox.w = std::max(global_bbox.w, local_bbox.w);
+                }
+            }
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    std::vector<std::vector<float>> buffer;
+
+    for( auto box : pdata_bounds ){
+        vec4 bbox = box.second;
+        if( bbox.x==bbox.y || bbox.z==bbox.w ){ //filter boxes of zeros size
+            continue;
+        }
+
+        std::vector<float> data;
+        data.push_back(((bbox.x + 0.5 * (bbox.y - bbox.x)) / float(camera_resolution.x)));
+        data.push_back(((bbox.z + 0.5 * (bbox.w - bbox.z)) / float(camera_resolution.y)));
+        data.push_back(((bbox.y - bbox.x) / float(camera_resolution.x)));
+        data.push_back(((bbox.w - bbox.z) / float(camera_resolution.y)));
+
+        buffer.push_back(data);
+    }
+
+    return buffer;
+}
+// end of my new functions

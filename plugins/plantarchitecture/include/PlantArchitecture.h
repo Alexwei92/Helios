@@ -2343,6 +2343,11 @@ public:
     friend struct Phytomer;
     friend struct Shoot;
 
+    // start of my new functions
+    void deleteIntersectingFruits(uint plantID);
+    helios::Context* getContextPtr() const {return context_ptr;};
+    // end of my new functions
+    
 protected:
 
     helios::Context* context_ptr;

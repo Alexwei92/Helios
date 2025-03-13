@@ -16,6 +16,7 @@
 #include "PlantArchitecture.h"
 
 #include <utility>
+#include <unordered_set>
 
 using namespace helios;
 
@@ -3881,3 +3882,90 @@ void PlantArchitecture::optionalOutputObjectData(const std::vector<std::string> 
         output_object_data.at(label) = true;
     }
 }
+
+// start of my new functions
+void PlantArchitecture::deleteIntersectingFruits(uint plantID) {
+    if( plant_instances.find(plantID) == plant_instances.end() ){
+        helios_runtime_error("ERROR (PlantArchitecture::getPlantInflorescenceObjectIDs): Plant with ID of " + std::to_string(plantID) + " does not exist.");
+    }
+
+    auto intersects = [](const vec3& min1, const vec3& max1, const vec3& min2, const vec3& max2) {
+        return (min1.x < max2.x && max1.x > min2.x) &&
+               (min1.y < max2.y && max1.y > min2.y) &&
+               (min1.z < max2.z && max1.z > min2.z);
+    };
+
+    std::vector<std::pair<vec3, vec3>> bounding_boxes;
+    std::vector<uint> fruit_UUIDs;
+
+    // Get all the bounding boxes and UUIDs of the fruits
+    for( auto &shoot : plant_instances.at(plantID).shoot_tree ){
+        for( auto &phytomer : shoot->phytomers ){
+            for(int petiole=0; petiole<phytomer->floral_buds.size(); petiole++ ){
+                for(int bud=0; bud<phytomer->floral_buds.at(petiole).size(); bud++ ){
+                    if(phytomer->floral_buds.at(petiole).at(bud).state == BUD_FRUITING ) {
+                        auto &fbud = phytomer->floral_buds.at(petiole).at(bud);
+                        for (uint UUID: fbud.inflorescence_objIDs) {
+                            vec3 min_corner, max_corner;
+                            context_ptr->getObjectBoundingBox(UUID, min_corner, max_corner);
+                            bounding_boxes.emplace_back(min_corner, max_corner);
+                            fruit_UUIDs.push_back(UUID);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (fruit_UUIDs.size() == 0) return;
+
+    // Detect and remove intersecting fruits
+    std::unordered_set<uint> fruits_to_remove;
+    std::unordered_set<size_t> removed_indices;
+
+    for (size_t i = 0; i < bounding_boxes.size(); ++i) {
+        if (removed_indices.count(i)) continue;
+
+        for (size_t j = i + 1; j < bounding_boxes.size(); ++j) {
+            if (intersects(bounding_boxes[i].first, bounding_boxes[i].second,
+                           bounding_boxes[j].first, bounding_boxes[j].second)) {
+                removed_indices.insert(j);
+                fruits_to_remove.insert(fruit_UUIDs[j]);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < fruit_UUIDs.size(); ++i) {
+        if (fruits_to_remove.find(fruit_UUIDs[i]) != fruits_to_remove.end()) {
+            context_ptr->deleteObject(fruit_UUIDs[i]);
+        }
+    }
+
+    for( auto &shoot : plant_instances.at(plantID).shoot_tree ){
+        for( auto &phytomer : shoot->phytomers ){
+            for(int petiole=0; petiole<phytomer->floral_buds.size(); petiole++ ){
+                for(int bud=0; bud<phytomer->floral_buds.at(petiole).size(); bud++ ){
+                    if (phytomer->floral_buds.at(petiole).at(bud).state == BUD_FRUITING) {
+                        auto &fbud = phytomer->floral_buds.at(petiole).at(bud);
+
+                        auto it_obj = fbud.inflorescence_objIDs.begin();
+                        auto it_base = fbud.inflorescence_bases.begin();
+
+                        while (it_obj != fbud.inflorescence_objIDs.end()) {
+                            if (fruits_to_remove.find(*it_obj) != fruits_to_remove.end()) {
+                                it_obj = fbud.inflorescence_objIDs.erase(it_obj);
+                                it_base = fbud.inflorescence_bases.erase(it_base);
+                            } else {
+                                ++it_obj;
+                                ++it_base;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "plant " << plantID << ": " << fruits_to_remove.size() << " fruits removed due to intersection" << std::endl;
+}
+// end of my new functions
