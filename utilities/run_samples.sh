@@ -11,15 +11,16 @@ usage() {
     echo "  --memcheck       Enable memory checking tools (requires leaks on macOS or valgrind on Linux)"
     echo "  --debugbuild     Build with Debug configuration"
     echo "  --verbose        Show full build/compile output"
+    echo "  --log-file <file>  Redirect all output to a specified log file"
     echo
     exit 1
 }
 
-SAMPLES=("context_selftest" "visualizer_selftest" "radiation_selftest" "energybalance_selftest" "leafoptics_selftest" "solarposition_selftest" "stomatalconductance_selftest" "photosynthesis_selftest" "weberpenntree_selftest" "lidar_selftest" "aeriallidar_selftest" "voxelintersection_selftest" "canopygenerator_selftest" "boundarylayerconductance_selftest" "syntheticannotation_selftest" "plantarchitecture_selftest" "projectbuilder_selftest" "tutorial0" "tutorial1" "tutorial2" "tutorial5" )
-SAMPLES_NOGPU=("context_selftest" "visualizer_selftest" "leafoptics_selftest" "solarposition_selftest" "stomatalconductance_selftest" "photosynthesis_selftest" "weberpenntree_selftest" "canopygenerator_selftest" "boundarylayerconductance_selftest" "syntheticannotation_selftest" "plantarchitecture_selftest" "projectbuilder_selftest" "tutorial0" "tutorial1" "tutorial2" "tutorial5")
+SAMPLES=("context_selftest" "visualizer_selftest" "radiation_selftest" "energybalance_selftest" "leafoptics_selftest" "solarposition_selftest" "stomatalconductance_selftest" "photosynthesis_selftest" "weberpenntree_selftest" "lidar_selftest" "aeriallidar_selftest" "voxelintersection_selftest" "canopygenerator_selftest" "boundarylayerconductance_selftest" "syntheticannotation_selftest" "plantarchitecture_selftest" "projectbuilder_selftest" "planthydraulics_selftest" "tutorial0" "tutorial1" "tutorial2" "tutorial5" )
+SAMPLES_NOGPU=("context_selftest" "visualizer_selftest" "leafoptics_selftest" "solarposition_selftest" "stomatalconductance_selftest" "photosynthesis_selftest" "weberpenntree_selftest" "canopygenerator_selftest" "boundarylayerconductance_selftest" "syntheticannotation_selftest" "plantarchitecture_selftest" "projectbuilder_selftest" "planthydraulics_selftest" "tutorial0" "tutorial1" "tutorial2" "tutorial5")
 
-TEST_PLUGINS="energybalance lidar aeriallidar photosynthesis radiation leafoptics solarposition stomatalconductance visualizer voxelintersection weberpenntree canopygenerator boundarylayerconductance syntheticannotation plantarchitecture projectbuilder"
-TEST_PLUGINS_NOGPU="leafoptics photosynthesis solarposition stomatalconductance visualizer weberpenntree canopygenerator boundarylayerconductance syntheticannotation plantarchitecture projectbuilder"
+TEST_PLUGINS="energybalance lidar aeriallidar photosynthesis radiation leafoptics solarposition stomatalconductance visualizer voxelintersection weberpenntree canopygenerator boundarylayerconductance syntheticannotation plantarchitecture projectbuilder planthydraulics"
+TEST_PLUGINS_NOGPU="leafoptics photosynthesis solarposition stomatalconductance visualizer weberpenntree canopygenerator boundarylayerconductance syntheticannotation plantarchitecture projectbuilder planthydraulics"
 
 BUILD_TYPE="Release"
 OUTPUT_REDIRECT=" &>/dev/null"
@@ -34,6 +35,7 @@ fi
 while [ $# -gt 0 ]; do
   case $1 in
   --checkout)
+    CHECKOUT_MODE="ON"
     cd /tmp || exit 1
 
     if [ -e "./helios_test" ]; then
@@ -71,8 +73,19 @@ while [ $# -gt 0 ]; do
     ;;
 
   --verbose)
-      unset OUTPUT_REDIRECT
-      ;;
+    unset OUTPUT_REDIRECT
+    ;;
+
+  --log-file)
+    if [ -z "$2" ]; then
+      echo "Error: --log-file requires a file path."
+      usage
+    fi
+    LOG_FILE="$2"
+    OUTPUT_REDIRECT=" &>>\"$LOG_FILE\""
+    > "$LOG_FILE"
+    shift
+    ;;
 
   --help|-h)
     usage
@@ -85,6 +98,21 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# Initialize log file after argument parsing
+if [ -n "$LOG_FILE" ]; then
+  > "$LOG_FILE"
+fi
+
+# After argument parsing, add this logic:
+if [ -n "$LOG_FILE" ] && [ -z "$OUTPUT_REDIRECT" ]; then
+  # Verbose mode was enabled, but we also want logging
+  # Option 1: Use tee to show output AND log it
+  OUTPUT_REDIRECT=" 2>&1 | tee -a \"$LOG_FILE\""
+  # Option 2: Or warn the user about the conflict
+  # echo "Warning: --verbose and --log-file used together. Output will only go to log file."
+  # OUTPUT_REDIRECT=" &>>\"$LOG_FILE\""
+fi
 
 if [ "${MEMCHECK}" == "ON" ];then
   if [[ "${OSTYPE}" == "darwin"* ]];then
@@ -296,7 +324,7 @@ for i in "${SAMPLES[@]}"; do
 
 done
 
-if [ "$1" == "-checkout" ]; then
+if [ "$CHECKOUT_MODE" == "ON" ]; then
   cd ../..
   rm -r ./helios_test
 fi
